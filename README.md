@@ -1,16 +1,18 @@
 # 📊 Excel Parser API - Business Analysis Template
 
-FastAPI-based system for parsing Excel business analysis documents with asynchronous processing and real-time status tracking.
+FastAPI-based system for parsing Excel business analysis documents with asynchronous processing, real-time status tracking, and approval workflow management.
 
 ## 🚀 Features
 
-- **Excel Document Parsing**: Parse structured Excel files with multiple sheets (Product Overview, User Stories, Acceptance Criteria, Business Value)
+- **Excel Document Parsing**: Parse structured Excel files with 5 sheets (Product Overview, User Stories, Acceptance Criteria, Business Value, BA Approval)
 - **Asynchronous Processing**: Non-blocking background processing for large files
 - **Real-time Status Tracking**: Monitor upload and processing status via batch tracking
-- **Structured Data Storage**: Store parsed data as JSON in relational database
+- **Approval Workflow**: Built-in BA approval status tracking with submission and approval metadata
+- **Structured Data Storage**: Store parsed data as clean JSON in relational database
 - **Category Management**: Automatic category creation with slug generation
 - **RESTful API**: Complete REST API with proper error handling
 - **SQLite Database**: Lightweight, file-based database with multi-thread support
+- **Smart Data Handling**: Automatic fallback for empty values and robust error recovery
 
 ## 📋 System Architecture
 
@@ -99,9 +101,21 @@ The system expects Excel files with the following sheet structure:
 ### Sheet 4: **Business Value** (Key-Value Format)
 | Metric | Value |
 |--------|-------|
-| ROI | 150% |
-| Time to Market | 6 months |
-| ... | ... |
+| Time Savings | [Value or - if empty] |
+| Error Reduction | [Value or - if empty] |
+| Compliance | [Value or - if empty] |
+| Scalability | [Value or - if empty] |
+| User Adoption | [Value or - if empty] |
+
+### Sheet 5: **BA Approval** (Key-Value Format)
+| Field | Value |
+|-------|-------|
+| Submitted Date | [Date] |
+| Submitted By | [Name] |
+| Submitted To | [Approver Name] |
+| Approval Status | [Approved/Pending/Revision Needed] |
+| Approved Date | [Date] |
+| Comments | [Approval comments] |
 
 ## 🔌 API Documentation
 
@@ -232,35 +246,69 @@ curl -X GET "http://localhost:8000/documents/doc-123e4567-e89b-12d3-a456-4266141
   },
   "parsed_data": {
     "product_details": {
+      "product_id": "PRD-001",
       "product_name": "Amazing Product",
       "category": "E-Commerce",
-      "version": "1.0"
+      "ba_name": "John Doe",
+      "start_date": "2025-01-21",
+      "target_completion": "2025-03-21",
+      "problem_statement": "Current manual process is inefficient",
+      "solution_overview": "Automated solution to streamline workflows"
     },
     "business_values": {
-      "roi": "150%",
-      "time_to_market": "6 months"
+      "time_savings": "40 hours/month",
+      "error_reduction": "85%",
+      "compliance": "-",
+      "scalability": "1000+ users",
+      "user_adoption": "95%"
     },
-    "features": {
-      "user_stories": [
-        {
-          "id": "US001",
-          "user_story": "As a user, I want to search products",
-          "priority": "High",
-          "status": "Active"
-        }
-      ],
-      "acceptance_criteria": [
-        {
-          "id": "AC001",
-          "criteria": "Given I am on homepage When I search Then I see results",
-          "user_story_id": "US001",
-          "status": "Active"
-        }
-      ]
+    "ba_approval": {
+      "submitted_date": "2025-01-20",
+      "submitted_by": "John Doe",
+      "submitted_to": "Jane Smith",
+      "approval_status": "Approved",
+      "approved_date": "2025-01-21",
+      "comments": "Well-structured requirements, approved for development"
     },
+    "user_stories": [
+      {
+        "US-ID": "US001",
+        "Title": "Search Products",
+        "Persona": "Customer",
+        "Aksi yang dilakukan": "search for products using keywords",
+        "Business Value": "find relevant products quickly"
+      },
+      {
+        "US-ID": "US002",
+        "Title": "Filter Products",
+        "Persona": "Customer",
+        "Aksi yang dilakukan": "filter products by category and price",
+        "Business Value": "narrow down product choices"
+      }
+    ],
+    "acceptance_criteria": [
+      {
+        "AC-ID": "AC001",
+        "US-ID": "US001",
+        "Scenario": "Successful product search",
+        "GIVEN": "I am on the homepage",
+        "WHEN": "I enter a product keyword and click search",
+        "THEN": "I see relevant products matching my search"
+      },
+      {
+        "AC-ID": "AC002",
+        "US-ID": "US001",
+        "Scenario": "No search results",
+        "GIVEN": "I am on the homepage",
+        "WHEN": "I search for a non-existent product",
+        "THEN": "I see a 'No products found' message with suggestions"
+      }
+    ],
     "parsing_stats": {
-      "total_us": 5,
-      "total_ac": 12
+      "total_us": 2,
+      "total_ac": 2,
+      "total_bv": 5,
+      "has_ba_approval": true
     }
   },
   "status": "ACTIVE",
@@ -415,6 +463,115 @@ with open('test.xlsx', 'rb') as f:
 batch_id = "your-batch-id"
 response = requests.get(f'http://localhost:8000/batches/{batch_id}')
 print(json.dumps(response.json(), indent=2))
+
+# Test document details
+doc_id = "your-doc-id"
+response = requests.get(f'http://localhost:8000/documents/{doc_id}')
+doc_data = response.json()
+
+# Check approval status
+approval_status = doc_data['parsed_data']['ba_approval']['approval_status']
+print(f"Approval Status: {approval_status}")
+
+# Check parsing statistics
+stats = doc_data['parsed_data']['parsing_stats']
+print(f"Total User Stories: {stats['total_us']}")
+print(f"Total Acceptance Criteria: {stats['total_ac']}")
+print(f"Has BA Approval: {stats['has_ba_approval']}")
+```
+
+## 🎯 Advanced Features
+
+### 1. BA Approval Workflow
+
+The system includes built-in approval workflow tracking:
+
+**Approval Status Values**:
+- `Approved` - Document has been approved
+- `Pending` - Waiting for approval
+- `Revision Needed` - Document needs changes
+
+**Approval Metadata**:
+```json
+{
+  "ba_approval": {
+    "submitted_date": "2025-01-20",
+    "submitted_by": "Business Analyst Name",
+    "submitted_to": "Approver Name",
+    "approval_status": "Approved",
+    "approved_date": "2025-01-21",
+    "comments": "Approval comments and feedback"
+  }
+}
+```
+
+### 2. Smart Data Handling
+
+**Empty Value Handling**:
+- Business values with no data automatically get "-" as placeholder
+- Skips header rows automatically (Field, Metric, etc.)
+- Handles NaN/null values gracefully
+
+**Data Cleaning**:
+- Removes extra whitespace from text fields
+- Converts dates to ISO format (YYYY-MM-DD)
+- Standardizes field names (lowercase, underscores)
+
+### 3. Enhanced JSON Structure
+
+The new JSON structure provides better organization:
+
+```json
+{
+  "metadata": {
+    "product_details": { ... },
+    "business_values": { ... },
+    "ba_approval": { ... },
+    "user_stories": [ ... ],      // Separate array (not nested)
+    "acceptance_criteria": [ ... ], // Separate array (not nested)
+    "parsing_stats": {
+      "total_us": 3,
+      "total_ac": 5,
+      "total_bv": 8,
+      "has_ba_approval": true
+    }
+  }
+}
+```
+
+### 4. Parsing Statistics
+
+Use statistics to understand document completeness:
+
+```python
+# Check if document is ready for development
+stats = doc_data['parsed_data']['parsing_stats']
+
+is_complete = (
+    stats['total_us'] > 0 and
+    stats['total_ac'] > 0 and
+    stats['has_ba_approval']
+)
+
+approval_status = doc_data['parsed_data']['ba_approval']['approval_status']
+ready_for_dev = is_complete and approval_status == 'Approved'
+```
+
+### 5. Business Value Tracking
+
+Track business impact metrics:
+
+```python
+# Get business value metrics
+business_values = doc_data['parsed_data']['business_values']
+
+# Check which metrics have actual values
+completed_metrics = {
+    key: value for key, value in business_values.items()
+    if value != "-"
+}
+
+print(f"Completed Business Metrics: {len(completed_metrics)}/{len(business_values)}")
 ```
 
 ## 🔍 Error Handling
@@ -499,6 +656,8 @@ DEBUG=False
 - **Memory Efficiency**: Files are read into memory once and passed to background tasks
 - **Database Optimization**: SQLite with multi-thread support for concurrent operations
 - **Error Recovery**: Failed processing is logged without losing batch records
+- **Smart Parsing**: Optimized parsing logic handles empty values gracefully
+- **Batch Operations**: Efficient processing of multiple Excel sheets in single operation
 
 ## 🔒 Security Notes
 
@@ -506,6 +665,8 @@ DEBUG=False
 - **Size Limits**: Consider implementing file size limits for production
 - **Input Sanitization**: All Excel data is cleaned before storage
 - **Database Security**: SQLAlchemy provides SQL injection protection
+- **Approval Workflow**: Built-in tracking for BA approval status changes
+- **Data Integrity**: Maintains audit trail for document approval process
 
 ## 🤝 Contributing
 
@@ -518,6 +679,45 @@ DEBUG=False
 ## 📄 License
 
 This project is licensed under the MIT License.
+
+## 📋 Changelog
+
+### v2.0.0 - Latest Release (2025-01-21)
+
+**🚀 Major Features Added**:
+- ✅ **BA Approval Workflow**: Complete approval status tracking with metadata
+- ✅ **Enhanced JSON Structure**: Separate arrays for user_stories and acceptance_criteria
+- ✅ **Business Value Parsing**: Smart parsing with fallback for empty values
+- ✅ **5-Sheet Support**: Product Overview, User Story, Acceptance Criteria, Business Value, BA Approval
+
+**🔧 Improvements**:
+- Smart data handling for empty business value metrics
+- Automatic header row detection and skipping
+- Enhanced parsing statistics with `total_bv` and `has_ba_approval`
+- Better error recovery and data cleaning
+
+**📊 JSON Structure Changes**:
+```json
+// OLD STRUCTURE
+"features": {
+  "user_stories": [...],
+  "acceptance_criteria": [...]
+}
+
+// NEW STRUCTURE
+"user_stories": [...],      // Separate array
+"acceptance_criteria": [...], // Separate array
+"ba_approval": {...},        // New approval section
+"business_values": {...}     // Enhanced parsing
+```
+
+### v1.0.0 - Initial Release
+
+**🎯 Core Features**:
+- Excel document parsing with 4 sheets
+- Asynchronous background processing
+- Batch tracking and status monitoring
+- RESTful API with proper error handling
 
 ## 🆘 Troubleshooting
 
