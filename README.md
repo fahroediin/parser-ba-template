@@ -44,7 +44,7 @@ FastAPI-based system for parsing Excel business analysis documents with asynchro
 
 ### 1. Clone Repository
 ```bash
-git clone <repository-url>
+git clone https://github.com/fahroediin/parser-ba-template.git
 cd parser-ba-template
 ```
 
