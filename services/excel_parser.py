@@ -2,6 +2,8 @@ import pandas as pd
 import io
 import json
 from datetime import datetime
+from services.image_extractor import ImageExtractor
+import uuid
 
 class ExcelParserService:
     def __init__(self, file_content: bytes):
@@ -116,7 +118,7 @@ class ExcelParserService:
             self.errors.append(f"Error parsing BA Approval: {str(e)}")
             return {}
 
-    def process_file(self):
+    def process_file(self, batch_id: str = None, document_id: str = None):
         # 1. Parse Product Overview
         overview = self.parse_product_overview()
 
@@ -136,6 +138,38 @@ class ExcelParserService:
         # 5. Parse BA Approval
         ba_approval = self.parse_ba_approval()
 
+        # 6. Extract Images (New Feature!)
+        extracted_images = []
+        if batch_id and document_id:
+            try:
+                image_extractor = ImageExtractor(self.excel_file.getvalue(), batch_id, document_id)
+                extracted_images = image_extractor.extract_images_from_excel()
+                self.extracted_images = extracted_images
+                print(f"Extracted {len(extracted_images)} images from Excel file")
+            except Exception as e:
+                print(f"Image extraction failed: {e}")
+                self.errors.append(f"Image extraction error: {str(e)}")
+
+        # Generate image metadata for JSON
+        image_metadata = []
+        if hasattr(self, 'extracted_images'):
+            image_metadata = [
+                {
+                    'id': str(uuid.uuid4()),
+                    'type': img['image_type'],
+                    'file_name': img['file_name'],
+                    'file_path': img['file_path'],
+                    'url': f"/api/images/{img['file_path']}",
+                    'sheet_name': img['sheet_name'],
+                    'cell_reference': img['cell_reference'],
+                    'file_size': img['file_size'],
+                    'width': img['width'],
+                    'height': img['height'],
+                    'mime_type': img['mime_type']
+                }
+                for img in self.extracted_images
+            ]
+
         # Struktur JSON akhir untuk kolom 'metadata'
         full_json_metadata = {
             "product_details": overview,
@@ -143,11 +177,14 @@ class ExcelParserService:
             "ba_approval": ba_approval,
             "user_stories": user_stories,
             "acceptance_criteria": acceptance_criteria,
+            "images": image_metadata,  # NEW: Image metadata
             "parsing_stats": {
                 "total_us": len(user_stories),
                 "total_ac": len(acceptance_criteria),
                 "total_bv": len(business_values),
-                "has_ba_approval": len(ba_approval) > 0
+                "total_images": len(extracted_images),
+                "has_ba_approval": len(ba_approval) > 0,
+                "has_images": len(extracted_images) > 0
             }
         }
 
@@ -155,5 +192,6 @@ class ExcelParserService:
             "title": doc_title,
             "category_name": category_name,
             "metadata": full_json_metadata,
-            "errors": self.errors
+            "errors": self.errors,
+            "extracted_images": extracted_images  # Return extracted images for DB storage
         }

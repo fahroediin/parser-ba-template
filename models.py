@@ -47,17 +47,46 @@ class Category(Base):
 
 class Document(Base):
     __tablename__ = 'documents'
-    
+
     id = Column(String(36), primary_key=True, default=generate_uuid)
     import_batch_id = Column(String(36), ForeignKey('import_batches.id'))
     category_id = Column(Integer, ForeignKey('categories.id'))
     title = Column(String(255))
     description = Column(Text, nullable=True)
     source_url = Column(Text, nullable=True)
-    
+
     # Metadata disimpan sebagai JSON
-    metadata_content = Column(JSON, name='metadata') 
-    
+    metadata_content = Column(JSON, name='metadata')
+
     status = Column(String(20), default='ACTIVE')
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship to images
+    images = relationship("DocumentImage", back_populates="document", cascade="all, delete-orphan")
+
+class DocumentImage(Base):
+    __tablename__ = 'document_images'
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    document_id = Column(String(36), ForeignKey('documents.id'), nullable=False)
+
+    # Image metadata
+    image_type = Column(String(50), nullable=False)  # mockup, screenshot, diagram, wireframe
+    sheet_name = Column(String(255), nullable=True)   # Excel sheet where image was found
+    cell_reference = Column(String(20), nullable=True) # Cell location (e.g., "B5")
+
+    # File information
+    file_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)    # Relative storage path
+    file_size = Column(Integer, default=0)             # File size in bytes
+    mime_type = Column(String(100), nullable=True)
+    width = Column(Integer, nullable=True)              # Image dimensions
+    height = Column(Integer, nullable=True)
+
+    # Processing metadata
+    extraction_method = Column(String(50), default="openpyxl")  # openpyxl, zip_extraction
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationship back to document
+    document = relationship("Document", back_populates="images")

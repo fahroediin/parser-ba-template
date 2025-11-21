@@ -5,7 +5,8 @@ from sqlalchemy.future import select
 from database import get_db, engine # Anggap setup DB standar
 import models
 import shutil
-from services.excel_parser import ExcelParserService
+from services.parser_factory import ParserFactory
+from services.image_extractor import ImageExtractor
 from slugify import slugify
 from response_utils import (
     create_success_response, create_error_response, handle_http_exception,
@@ -20,9 +21,9 @@ from typing import List
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="Excel Parser API - Business Analysis Template",
-    description="Professional API for parsing Excel business analysis documents with approval workflow",
-    version="2.0.0",
+    title="Excel Parser API - Multi-Division Templates",
+    description="Professional API for parsing Excel documents with automatic template detection for BA, UIUX, and Engineering divisions",
+    version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -57,14 +58,17 @@ async def process_upload_background(batch_id: str, file_content: bytes, db: Sess
     batch = db.query(models.ImportBatch).filter(models.ImportBatch.id == batch_id).first()
     
     try:
-        # Parsing Excel
-        parser = ExcelParserService(file_content)
-        result = parser.process_file()
-        
+        # Auto-detect template and parse Excel with image extraction
+        detected_template_type = ParserFactory.detect_template_type(file_content)
+        print(f"Auto-detected template type: {detected_template_type}")
+
+        parser = ParserFactory.create_parser(file_content)
+        result = parser.process_file(batch_id=batch.id, document_id=str(new_batch.id))
+
         if result['errors']:
             batch.error_log = result['errors']
             # Kita tidak langsung fail kalau ada error parsial, tapi dicatat
-        
+
         # 1. Handle Category (Cari atau Buat)
         cat_name = result['category_name']
         category = db.query(models.Category).filter(models.Category.name == cat_name).first()
@@ -72,7 +76,7 @@ async def process_upload_background(batch_id: str, file_content: bytes, db: Sess
             category = models.Category(name=cat_name, slug=slugify(cat_name))
             db.add(category)
             db.flush() # Dapatkan ID
-            
+
         # 2. Insert Document
         new_doc = models.Document(
             import_batch_id=batch.id,
@@ -83,8 +87,19 @@ async def process_upload_background(batch_id: str, file_content: bytes, db: Sess
             status='ACTIVE'
         )
         db.add(new_doc)
+        db.flush() # Dapatkan document_id
+
+        # 3. Handle Image Storage (NEW!)
+        if result.get('extracted_images'):
+            try:
+                image_extractor = ImageExtractor(file_content, batch.id, str(new_doc.id))
+                saved_images = image_extractor.save_images_to_database(db, result['extracted_images'])
+                print(f"Saved {len(saved_images)} images to database")
+            except Exception as e:
+                print(f"Error saving images to database: {e}")
+                # Don't fail the entire process if image saving fails
         
-        # 3. Update Batch Status
+        # 4. Update Batch Status
         batch.status = 'COMPLETED'
         batch.success_count = 1 # Asumsi 1 file = 1 dokumen sukses
         batch.total_rows = result['metadata']['parsing_stats']['total_us'] # Contoh metric
@@ -168,6 +183,207 @@ async def upload_document(
             status_code=500,
             detail=f"Internal server error during file upload: {str(e)}"
         )
+
+@app.post("/upload/document")
+async def upload_document_with_template(
+    file: UploadFile = File(...),
+    template_type: str = None,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db)
+):
+    """Upload Excel document with optional template type specification"""
+    try:
+        # Validasi Ekstensi
+        if not file.filename.endswith('.xlsx'):
+            raise HTTPException(
+                status_code=400,
+                detail=[
+                    {
+                        "type": "value_error",
+                        "loc": ["body", "file"],
+                        "msg": "Invalid file format. Must be .xlsx",
+                        "input": file.filename,
+                        "url": "https://errors.pydantic.dev/2.5/v/value_error"
+                    }
+                ]
+            )
+
+        # Validate template type if provided
+        if template_type:
+            valid_types = ParserFactory.get_supported_template_types()
+            if template_type.upper() not in valid_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid template type. Must be one of: {', '.join(valid_types)}"
+                )
+            template_type = template_type.upper()
+
+        # Validasi file size
+        content = await file.read()
+        if len(content) > 10 * 1024 * 1024:  # 10MB
+            raise HTTPException(
+                status_code=413,
+                detail="File size exceeds maximum allowed limit of 10MB"
+            )
+
+        # Mock User ID
+        mock_user = db.query(models.User).first()
+        if not mock_user:
+            mock_user = models.User(email="admin@company.com", password_hash="xxx", full_name="Admin")
+            db.add(mock_user)
+            db.commit()
+
+        # Create Import Batch Record with template info
+        new_batch = models.ImportBatch(
+            user_id=mock_user.id,
+            filename=file.filename,
+            status='PROCESSING'
+        )
+        db.add(new_batch)
+        db.commit()
+        db.refresh(new_batch)
+
+        # Enhanced background processing with template type
+        background_tasks.add_task(
+            process_upload_background_with_template,
+            new_batch.id, content, template_type, db
+        )
+
+        response = create_upload_response(
+            batch_id=str(new_batch.id),
+            filename=file.filename,
+            status=ResponseStatus.PROCESSING
+        )
+
+        return JSONResponse(content=response.dict(), status_code=201)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error during file upload: {str(e)}"
+        )
+
+async def process_upload_background_with_template(
+    batch_id: str,
+    file_content: bytes,
+    template_type: str = None,
+    db: Session = None
+):
+    """Background processing with explicit template type support"""
+
+    batch = db.query(models.ImportBatch).filter(models.ImportBatch.id == batch_id).first()
+
+    try:
+        # Use explicit template type if provided, otherwise auto-detect
+        if template_type:
+            print(f"Using explicit template type: {template_type}")
+            parser = ParserFactory.create_parser(file_content, template_type)
+        else:
+            print("Auto-detecting template type...")
+            parser = ParserFactory.create_parser(file_content)
+
+        result = parser.process_file(batch_id=batch.id, document_id=str(batch.id))
+
+        if result['errors']:
+            batch.error_log = result['errors']
+
+        # Handle Category
+        cat_name = result['category_name']
+        category = db.query(models.Category).filter(models.Category.name == cat_name).first()
+        if not category:
+            category = models.Category(name=cat_name, slug=slugify(cat_name))
+            db.add(category)
+            db.flush()
+
+        # Insert Document with enhanced metadata
+        new_doc = models.Document(
+            import_batch_id=batch.id,
+            category_id=category.id,
+            title=result['title'],
+            description=f"Imported from {batch.filename} ({result.get('template_type', 'Unknown')} template)",
+            metadata_content=result['metadata'],
+            status='ACTIVE'
+        )
+        db.add(new_doc)
+        db.flush()
+
+        # Handle Image Storage
+        if result.get('extracted_images'):
+            try:
+                image_extractor = ImageExtractor(file_content, batch.id, str(new_doc.id))
+                saved_images = image_extractor.save_images_to_database(db, result['extracted_images'])
+                print(f"Saved {len(saved_images)} images to database")
+            except Exception as e:
+                print(f"Error saving images to database: {e}")
+
+        # Update Batch Status with enhanced metrics
+        batch.status = 'COMPLETED'
+        batch.success_count = 1
+
+        # Use appropriate parsing stats based on template type
+        metadata = result.get('metadata', {})
+        if result.get('template_type') == 'BA':
+            batch.total_rows = metadata.get('parsing_stats', {}).get('total_us', 0)
+        elif result.get('template_type') == 'UIUX':
+            batch.total_rows = metadata.get('parsing_stats', {}).get('total_figma_links', 0)
+        elif result.get('template_type') == 'ENGINEER':
+            batch.total_rows = metadata.get('parsing_stats', {}).get('total_tech_stack', 0)
+
+        db.commit()
+        print(f"Batch {batch_id} completed successfully with template type: {result.get('template_type')}")
+
+    except Exception as e:
+        db.rollback()
+        batch.status = 'FAILED'
+        batch.error_log = {"critical_error": str(e)}
+        batch.failed_count = 1
+        db.commit()
+        print(f"Batch {batch_id} failed: {e}")
+
+@app.post("/validate-template")
+async def validate_template(
+    file: UploadFile = File(...),
+    template_type: str = None
+):
+    """Validate Excel file against template(s)"""
+    try:
+        if not file.filename.endswith('.xlsx'):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file format. Must be .xlsx"
+            )
+
+        content = await file.read()
+
+        # Validate template
+        validation_results = ParserFactory.validate_template(content, template_type)
+
+        # Auto-detect template type if not specified
+        if template_type is None:
+            detected_type = ParserFactory.detect_template_type(content)
+            validation_results['detected_template_type'] = detected_type
+
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "validation_results": validation_results
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error validating template: {str(e)}"
+        )
+
+@app.get("/templates/supported")
+def get_supported_templates():
+    """Get list of supported template types"""
+    return {
+        "status": "success",
+        "supported_templates": ParserFactory.get_supported_template_types()
+    }
 
 @app.get("/batches/{batch_id}")
 def get_batch_status(batch_id: str, db: Session = Depends(get_db)):
